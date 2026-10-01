@@ -44,7 +44,6 @@ jobs:
 
   cross-compile:
     needs: tag
-    if: needs.tag.outputs.exists == 'false'
     strategy:
       fail-fast: false
       matrix:

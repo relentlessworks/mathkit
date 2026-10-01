@@ -9,8 +9,11 @@ permissions:
   contents: write
 
 jobs:
-  tag-and-release:
+  tag:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check_tag.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,64 +42,61 @@ jobs:
           git tag ${{ steps.version.outputs.version }}
           git push origin ${{ steps.version.outputs.version }}
 
+  cross-compile:
+    needs: tag
+    if: needs.tag.outputs.exists == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w" -o mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} ./cmd/mathkit
+          tar czf mathkit-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mathkit-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: mathkit-*.tar.gz
 
-      - name: Cross-compile
-        if: steps.check_tag.outputs.exists == 'false'
-        strategy:
-          matrix:
-            include:
-              - goos: linux
-                goarch: amd64
-              - goos: linux
-                goarch: arm64
-              - goos: darwin
-                goarch: amd64
-              - goos: darwin
-                goarch: arm64
-              - goos: windows
-                goarch: amd64
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-go@v5
-            with:
-              go-version-file: go.mod
-          - name: Build
-            env:
-              GOOS: ${{ matrix.goos }}
-              GOARCH: ${{ matrix.goarch }}
-              CGO_ENABLED: 0
-            run: |
-              ext=""
-              [ "$GOOS" = "windows" ] && ext=".exe"
-              go build -trimpath -ldflags "-s -w" -o mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} ./cmd/mathkit
-              tar czf mathkit-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} README.md
-          - uses: actions/upload-artifact@v4
-            with:
-              name: mathkit-${{ matrix.goos }}-${{ matrix.goarch }}
-              path: mathkit-*.tar.gz
-
-      - name: Publish release
-        if: steps.check_tag.outputs.exists == 'false'
-        needs: cross-compile
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/download-artifact@v4
-            with:
-              path: dist
-              merge-multiple: true
-          - name: Generate checksums
-            run: |
-              cd dist
-              sha256sum *.tar.gz > checksums.txt
-          - name: Create release
-            uses: softprops/action-gh-release@v2
-            with:
-              tag_name: ${{ steps.version.outputs.version }}
-              name: ${{ steps.version.outputs.version }}
-              generate_release_notes: true
-              files: dist/*
+  release:
+    needs: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.version }}
+          name: ${{ needs.tag.outputs.version }}
+          generate_release_notes: true
+          files: dist/*

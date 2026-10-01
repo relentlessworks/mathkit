@@ -1,0 +1,102 @@
+name: Tag & Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '*.md', 'LICENSE']
+
+permissions:
+  contents: write
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse ${{ steps.version.outputs.version }} >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.version }}
+          git push origin ${{ steps.version.outputs.version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cross-compile
+        if: steps.check_tag.outputs.exists == 'false'
+        strategy:
+          matrix:
+            include:
+              - goos: linux
+                goarch: amd64
+              - goos: linux
+                goarch: arm64
+              - goos: darwin
+                goarch: amd64
+              - goos: darwin
+                goarch: arm64
+              - goos: windows
+                goarch: amd64
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/setup-go@v5
+            with:
+              go-version-file: go.mod
+          - name: Build
+            env:
+              GOOS: ${{ matrix.goos }}
+              GOARCH: ${{ matrix.goarch }}
+              CGO_ENABLED: 0
+            run: |
+              ext=""
+              [ "$GOOS" = "windows" ] && ext=".exe"
+              go build -trimpath -ldflags "-s -w" -o mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} ./cmd/mathkit
+              tar czf mathkit-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz mathkit-${{ matrix.goos }}-${{ matrix.goarch }}${ext} README.md
+          - uses: actions/upload-artifact@v4
+            with:
+              name: mathkit-${{ matrix.goos }}-${{ matrix.goarch }}
+              path: mathkit-*.tar.gz
+
+      - name: Publish release
+        if: steps.check_tag.outputs.exists == 'false'
+        needs: cross-compile
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/download-artifact@v4
+            with:
+              path: dist
+              merge-multiple: true
+          - name: Generate checksums
+            run: |
+              cd dist
+              sha256sum *.tar.gz > checksums.txt
+          - name: Create release
+            uses: softprops/action-gh-release@v2
+            with:
+              tag_name: ${{ steps.version.outputs.version }}
+              name: ${{ steps.version.outputs.version }}
+              generate_release_notes: true
+              files: dist/*

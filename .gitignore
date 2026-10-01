@@ -1,0 +1,6 @@
+/mathkit
+*.exe
+*.dll
+*.so
+*.dylib
+.env

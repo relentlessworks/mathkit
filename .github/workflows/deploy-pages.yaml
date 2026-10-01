@@ -1,0 +1,40 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Save docs to temp
+        run: cp -r docs /tmp/docs-backup
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Deploy to gh-pages
+        run: |
+          git checkout --orphan gh-pages
+          git reset --hard
+          cp -r /tmp/docs-backup/* .
+          git add -A
+          git commit -m "Deploy docs to gh-pages"
+          git push origin gh-pages --force

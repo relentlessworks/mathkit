@@ -80,7 +80,7 @@ jobs:
           path: mathkit-*.tar.gz
 
   release:
-    needs: cross-compile
+    needs: [tag, cross-compile]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

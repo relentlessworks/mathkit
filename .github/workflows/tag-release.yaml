@@ -95,9 +95,66 @@ jobs:
           cd dist
           sha256sum *.tar.gz > checksums.txt
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.tag.outputs.version }}
-          name: ${{ needs.tag.outputs.version }}
-          generate_release_notes: true
-          files: dist/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.tag.outputs.version }}"
+          REPO="${{ github.repository }}"
+
+          # Check if release already exists
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Release ${VERSION} already exists, deleting and recreating..."
+            RELEASE_ID=$(curl -s \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}" | jq -r '.id')
+            curl -s -X DELETE \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}"
+          fi
+
+          # Create the release
+          echo "Creating release ${VERSION}..."
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases" \
+            -d "{\"tag_name\":\"${VERSION}\",\"name\":\"${VERSION}\",\"generate_release_notes\":true}")
+
+          UPLOAD_URL=$(echo "$RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          RELEASE_URL=$(echo "$RESPONSE" | jq -r '.html_url')
+
+          if [ "$UPLOAD_URL" = "null" ] || [ -z "$UPLOAD_URL" ]; then
+            echo "ERROR: Failed to create release"
+            echo "$RESPONSE" | jq .
+            exit 1
+          fi
+
+          echo "Release created: $RELEASE_URL"
+          echo "Upload URL: $UPLOAD_URL"
+
+          # Upload assets
+          cd dist
+          for file in *; do
+            echo "Uploading $file..."
+            UPLOAD_RESPONSE=$(curl -s -X POST \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Content-Type: application/gzip" \
+              --data-binary "@$file" \
+              "${UPLOAD_URL}?name=$file")
+            ASSET_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.browser_download_url')
+            if [ "$ASSET_URL" = "null" ] || [ -z "$ASSET_URL" ]; then
+              echo "WARNING: Failed to upload $file"
+              echo "$UPLOAD_RESPONSE" | jq .
+            else
+              echo "  Uploaded: $ASSET_URL"
+            fi
+          done
+
+          echo "Release ${VERSION} complete!"
